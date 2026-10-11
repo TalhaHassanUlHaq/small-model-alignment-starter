@@ -85,30 +85,33 @@ def main() -> None:
         task_type="CAUSAL_LM",
     )
 
-    training_args = DPOConfig(
-        output_dir=args.output_dir,
-        learning_rate=args.lr,
-        per_device_train_batch_size=args.batch_size,
-        gradient_accumulation_steps=args.grad_accum,
-        num_train_epochs=args.epochs,
-        beta=args.beta,
-        max_length=args.max_length,
-        max_prompt_length=256,
-        logging_steps=5,
-        save_strategy="epoch",
-        fp16=torch.cuda.is_available(),
-        report_to="none",
-        remove_unused_columns=False,
-    )
+    dpo_config_kwargs = {
+        "output_dir": args.output_dir,
+        "learning_rate": args.lr,
+        "per_device_train_batch_size": args.batch_size,
+        "gradient_accumulation_steps": args.grad_accum,
+        "num_train_epochs": args.epochs,
+        "beta": args.beta,
+        "max_length": args.max_length,
+        "logging_steps": 5,
+        "save_strategy": "epoch",
+        "fp16": torch.cuda.is_available(),
+        "report_to": "none",
+        "remove_unused_columns": False,
+    }
+    training_args = DPOConfig(**dpo_config_kwargs)
 
-    dpo_trainer = DPOTrainer(
-        model=model,
-        ref_model=None,
-        args=training_args,
-        train_dataset=train_dataset,
-        processing_class=tokenizer,
-        peft_config=peft_config,
-    )
+    dpo_trainer_kwargs = {
+        "model": model,
+        "ref_model": None,
+        "args": training_args,
+        "train_dataset": train_dataset,
+        "peft_config": peft_config,
+    }
+    try:
+        dpo_trainer = DPOTrainer(processing_class=tokenizer, **dpo_trainer_kwargs)
+    except TypeError:
+        dpo_trainer = DPOTrainer(tokenizer=tokenizer, **dpo_trainer_kwargs)
 
     print("Starting LoRA DPO Training with TRL...")
     dpo_trainer.train()
