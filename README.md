@@ -56,14 +56,39 @@ PYTHONPATH=. python -m pytest -q tests/test_public_adapter_smoke.py
 ```
 
 The tests use a tiny local tokenizer and model, so they do not download a model,
-load the assignment datasets, or require a GPU. The starter adapter raises
-`NotImplementedError` until you connect it to your implementation. Passing the
-public tests checks the interface and a few basic invariants; the private grader
+load the assignment datasets, or require a GPU. The scaffold adapter contains
+the required signatures but intentionally has no implementation. Passing the
+public tests will become a validation step after you connect your own code;
+the private grader
 also checks numerical correctness and harder edge cases described in the manual.
 
 For `compute_sft_loss`, the assignment accepts either the mean of per-example
 summed response negative log probabilities or the mean over all unmasked response
 tokens. Use one reduction consistently and document it in the report.
+
+## Scaffold layout
+
+The scaffold added to this starter repository separates reusable mathematics
+from Kaggle-specific orchestration:
+
+```text
+src/small_model_alignment/
+  batching.py       response-only SFT/DPO tensors and masks
+  losses.py         causal log-probabilities and the DPO objective
+  data.py           prompt formatting and dataset/schema boundaries
+  config.py         reproducible experiment settings
+  training.py       mixed-precision optimizer steps and DPO diagnostics
+  generation.py     fixed generation and blind pair construction
+  evaluation.py     judge normalization and aggregate metrics
+scripts/            skeleton entry points for each assignment task
+configs/            resolved experiment defaults
+reports/            final-report structure and checklist
+```
+
+The root `submission_adapter.py` intentionally contains only the required
+function signatures and TODO-level stubs. The script entry points and task
+guides contain pseudocode and explanations only; you must implement and report
+the experiments yourself.
 
 ## Fixed Files
 

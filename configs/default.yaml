@@ -1,0 +1,29 @@
+# Reproducibility contract for the assignment. Update values when experiments
+# differ, and copy the final resolved file into outputs/ with each run.
+model:
+  name_or_path: Qwen/Qwen2.5-0.5B
+  max_length: 512
+  seed: 42
+sft:
+  train_examples: 30000
+  validation_examples: 1000
+  per_device_batch_size: 2
+  gradient_accumulation_steps: 16
+  learning_rate: 0.00002
+  epochs: 1
+  warmup_ratio: 0.03
+  weight_decay: 0.1
+  max_grad_norm: 1.0
+dpo:
+  beta: 0.1
+  per_device_batch_size: 1
+  gradient_accumulation_steps: 32
+  learning_rate: 0.000001
+  epochs: 1
+  max_grad_norm: 1.0
+generation:
+  max_new_tokens: 256
+  do_sample: false
+  temperature: 1.0
+  top_p: 1.0
+  repetition_penalty: 1.0
