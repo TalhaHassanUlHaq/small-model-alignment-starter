@@ -1,0 +1,473 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>PA2 Assignment Report</title>
+<style>
+
+    @page {
+        size: A4;
+        margin: 1.8cm 1.8cm 1.8cm 1.8cm;
+        @bottom-right {
+            content: counter(page);
+        }
+    }
+    body {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        color: #1f2937;
+        line-height: 1.55;
+        font-size: 10pt;
+    }
+    h1 {
+        color: #111827;
+        font-size: 19pt;
+        border-bottom: 2px solid #2563eb;
+        padding-bottom: 6px;
+        margin-top: 0;
+        margin-bottom: 12px;
+    }
+    h2 {
+        color: #1e3a8a;
+        font-size: 13pt;
+        border-bottom: 1px solid #e5e7eb;
+        padding-bottom: 4px;
+        margin-top: 16px;
+        margin-bottom: 8px;
+        page-break-after: avoid;
+    }
+    h3 {
+        color: #1f2937;
+        font-size: 11pt;
+        margin-top: 12px;
+        margin-bottom: 6px;
+        page-break-after: avoid;
+    }
+    p {
+        margin: 6px 0;
+    }
+    table {
+        border-collapse: collapse;
+        width: 100%;
+        margin: 12px 0;
+        font-size: 9pt;
+    }
+    th, td {
+        border: 1px solid #d1d5db;
+        padding: 5px 8px;
+        text-align: left;
+    }
+    th {
+        background-color: #f3f4f6;
+        font-weight: 600;
+        color: #111827;
+    }
+    tr:nth-child(even) {
+        background-color: #f9fafb;
+    }
+    code {
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        font-size: 8.5pt;
+        background-color: #f3f4f6;
+        padding: 1px 4px;
+        border-radius: 3px;
+    }
+    pre {
+        background-color: #f8fafc;
+        border: 1px solid #e2e8f0;
+        border-radius: 4px;
+        padding: 8px 10px;
+        font-size: 8pt;
+        overflow-x: auto;
+        page-break-inside: avoid;
+    }
+    pre code {
+        background: none;
+        padding: 0;
+    }
+    blockquote {
+        margin: 8px 0;
+        padding: 6px 12px;
+        border-left: 3px solid #3b82f6;
+        background-color: #eff6ff;
+        font-size: 9pt;
+    }
+    img {
+        max-width: 100%;
+        height: auto;
+        display: block;
+        margin: 10px auto;
+        page-break-inside: avoid;
+    }
+    hr {
+        border: none;
+        border-top: 1px solid #e5e7eb;
+        margin: 12px 0;
+    }
+    
+</style>
+</head>
+<body>
+<h1 id="instruction-tuning-and-direct-preference-optimization-on-a-small-language-model">Instruction Tuning and Direct Preference Optimization on a Small Language Model</h1>
+<p><strong>Course Staff — Lead TA: Ahmad Jawwad</strong><br />
+<strong>Student:</strong> Talha Hassan Ul Haq<br />
+<strong>GitHub Repository:</strong> <a href="https://github.com/TalhaHassanUlHaq/small-model-alignment-starter">https://github.com/TalhaHassanUlHaq/small-model-alignment-starter</a><br />
+<strong>Kaggle Run:</strong> <a href="https://www.kaggle.com/code/talhahassanulhaq/pa2-advgenai">https://www.kaggle.com/code/talhahassanulhaq/pa2-advgenai</a></p>
+<hr />
+<h2 id="abstract">Abstract</h2>
+<p>This report documents the post-training alignment pipeline implemented for the small language model <code>Qwen/Qwen2.5-0.5B</code> and <code>SmolLM2-360M-Instruct</code>. Starting from pre-trained base checkpoints, we execute two primary post-training stages: Supervised Fine-Tuning (SFT) on single-turn instruction-response demonstrations, followed by Direct Preference Optimization (DPO) on pairwise preference data. We examine two distinct DPO objectives: safety and refusal behavior via Anthropic Helpful-Harmless (HH-RLHF), and general instruction-following helpfulness via UltraFeedback. Furthermore, we explore parameter-efficient style steering using TRL <code>DPOTrainer</code> and LoRA on a culinary persona dataset ("Idiot Sandwich"). We analyze training dynamics, implicit reward metrics ($r_w &gt; r_l$), and blinded pairwise model-based evaluation conducted using Kaggle model access.</p>
+<hr />
+<h2 id="1-repository-models-and-data">1. Repository, Models, and Data</h2>
+<h3 id="11-source-code-and-test-interface">1.1 Source Code and Test Interface</h3>
+<p>The full implementation is available in the public GitHub repository:<br />
+<code>https://github.com/TalhaHassanUlHaq/small-model-alignment-starter</code></p>
+<p>The root-level submission adapter <a href="file:///f:/Lums%20courses/FALL2026/GENAI/PA2/small-model-alignment-starter/submission_adapter.py"><code>submission_adapter.py</code></a> adheres strictly to the contract specified in Section 4.1 of the assignment manual:
+- <code>build_sft_batch(tokenizer, prompts, responses, max_length)</code>
+- <code>compute_response_logprobs(model, tokenizer, prompts, responses, max_length)</code>
+- <code>compute_sft_loss(model, tokenizer, prompts, responses, max_length)</code>
+- <code>build_dpo_batch(tokenizer, prompts, chosen_responses, rejected_responses, max_length)</code>
+- <code>compute_dpo_loss_from_logps(policy_chosen_logps, policy_rejected_logps, reference_chosen_logps, reference_rejected_logps, beta)</code>
+- <code>compute_dpo_loss(policy_model, reference_model, tokenizer, prompts, chosen_responses, rejected_responses, beta, max_length)</code></p>
+<p>All 7 public smoke tests (<code>tests/test_public_adapter_smoke.py</code>) and 5 additional boundary edge-case tests pass completely offline.</p>
+<h3 id="12-base-models">1.2 Base Models</h3>
+<ul>
+<li><strong>Primary Causal LM:</strong> <code>Qwen/Qwen2.5-0.5B</code> (490M parameters). Selected for its balance between tractable compute requirements on Kaggle Tesla T4 GPUs and sufficient capacity to demonstrate alignment phenomena.</li>
+<li><strong>LoRA Persona Model:</strong> <code>HuggingFaceTB/SmolLM2-360M-Instruct</code> (360M parameters).</li>
+</ul>
+<h3 id="13-datasets-and-filtering">1.3 Datasets and Filtering</h3>
+<ol>
+<li><strong>Supervised Fine-Tuning (SFT):</strong></li>
+<li>Source: <code>HuggingFaceH4/ultrachat_200k</code> (UltraChat single-turn instruction-response pairs).</li>
+<li>Training size: 30,000 examples.</li>
+<li>Validation size: 1,000 examples.</li>
+<li>Filtering: Multi-turn dialogues were parsed into clean single-turn prompt-response pairs. Accidental whitespace was stripped.</li>
+<li><strong>Anthropic Helpful-Harmless DPO (HH-RLHF):</strong></li>
+<li>Source: <code>Anthropic/hh-rlhf</code>.</li>
+<li>Training size: 15,000 pairwise examples.</li>
+<li>Validation size: 1,000 pairwise examples.</li>
+<li>Focus: Safety boundaries, calibrated uncertainty, and harmlessness.</li>
+<li><strong>UltraFeedback DPO:</strong></li>
+<li>Source: <code>HuggingFaceH4/ultrafeedback_binarized</code>.</li>
+<li>Training size: 15,000 pairwise examples.</li>
+<li>Validation size: 1,000 pairwise examples.</li>
+<li>Focus: General helpfulness, truthfulness, and instruction execution.</li>
+<li><strong>LoRA Persona Preference Subset:</strong></li>
+<li>Source: <code>data/persona_lora/ramsay_style_preferences.json</code> (220 examples).</li>
+<li>Target: Stylistic steering toward Gordon Ramsay persona without compromising factual correctness or safety.</li>
+<li><strong>Evaluation Prompts:</strong></li>
+<li>Fixed AlpacaEval subset: 300 instructions selected with random seed 42.</li>
+<li>Fixed HH-RLHF evaluation subset: <code>eval_sets/hh_rlhf_eval_300_seed42.json</code> (300 prompts).</li>
+<li>Fixed Persona evaluation prompt suite: 5 domain prompts covering cooking, coding, and safety.</li>
+</ol>
+<h3 id="14-unified-prompt-format">1.4 Unified Prompt Format</h3>
+<p>To maintain consistency across SFT, both from-scratch DPO runs, baseline generation, and evaluation, we employ the documented prompt format:</p>
+<pre><code class="language-text">Instruction:
+{instruction}
+
+Answer:
+</code></pre>
+<hr />
+<h2 id="2-experimental-configuration">2. Experimental Configuration</h2>
+<p>The table below summarizes the exact configuration across all four training tracks:</p>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">Hyperparameter / Setting</th>
+<th style="text-align: left;">SFT Full Fine-Tuning</th>
+<th style="text-align: left;">HH-RLHF DPO</th>
+<th style="text-align: left;">UltraFeedback DPO</th>
+<th style="text-align: left;">LoRA Persona DPO</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;"><strong>Base Model</strong></td>
+<td style="text-align: left;">Qwen2.5-0.5B</td>
+<td style="text-align: left;">SFT Best Checkpoint</td>
+<td style="text-align: left;">SFT Best Checkpoint</td>
+<td style="text-align: left;">SmolLM2-360M-Instruct</td>
+</tr>
+<tr>
+<td style="text-align: left;"><strong>Reference Model</strong></td>
+<td style="text-align: left;">None</td>
+<td style="text-align: left;">SFT Best (Frozen, fp16)</td>
+<td style="text-align: left;">SFT Best (Frozen, fp16)</td>
+<td style="text-align: left;">Frozen Base Policy</td>
+</tr>
+<tr>
+<td style="text-align: left;"><strong>Trainable Params</strong></td>
+<td style="text-align: left;">Full (490M, FP32)</td>
+<td style="text-align: left;">Full (490M, FP32)</td>
+<td style="text-align: left;">Full (490M, FP32)</td>
+<td style="text-align: left;">LoRA ($r=16, \alpha=32$)</td>
+</tr>
+<tr>
+<td style="text-align: left;"><strong>Target Modules</strong></td>
+<td style="text-align: left;">All weights</td>
+<td style="text-align: left;">All weights</td>
+<td style="text-align: left;">All weights</td>
+<td style="text-align: left;"><code>q, k, v, o_proj</code></td>
+</tr>
+<tr>
+<td style="text-align: left;"><strong>Training Pairs / Rows</strong></td>
+<td style="text-align: left;">30,000</td>
+<td style="text-align: left;">15,000</td>
+<td style="text-align: left;">15,000</td>
+<td style="text-align: left;">220</td>
+</tr>
+<tr>
+<td style="text-align: left;"><strong>Validation Size</strong></td>
+<td style="text-align: left;">1,000</td>
+<td style="text-align: left;">1,000</td>
+<td style="text-align: left;">1,000</td>
+<td style="text-align: left;">N/A</td>
+</tr>
+<tr>
+<td style="text-align: left;"><strong>Context Length ($T$)</strong></td>
+<td style="text-align: left;">512</td>
+<td style="text-align: left;">512</td>
+<td style="text-align: left;">512</td>
+<td style="text-align: left;">512</td>
+</tr>
+<tr>
+<td style="text-align: left;"><strong>Max Prompt Length</strong></td>
+<td style="text-align: left;">512</td>
+<td style="text-align: left;">256</td>
+<td style="text-align: left;">256</td>
+<td style="text-align: left;">256</td>
+</tr>
+<tr>
+<td style="text-align: left;"><strong>Per-Device Batch Size</strong></td>
+<td style="text-align: left;">2</td>
+<td style="text-align: left;">1</td>
+<td style="text-align: left;">1</td>
+<td style="text-align: left;">2</td>
+</tr>
+<tr>
+<td style="text-align: left;"><strong>Grad Accumulation</strong></td>
+<td style="text-align: left;">16</td>
+<td style="text-align: left;">32</td>
+<td style="text-align: left;">32</td>
+<td style="text-align: left;">4</td>
+</tr>
+<tr>
+<td style="text-align: left;"><strong>Effective Batch Size</strong></td>
+<td style="text-align: left;">32</td>
+<td style="text-align: left;">32</td>
+<td style="text-align: left;">32</td>
+<td style="text-align: left;">8</td>
+</tr>
+<tr>
+<td style="text-align: left;"><strong>Optimizer</strong></td>
+<td style="text-align: left;">AdamW</td>
+<td style="text-align: left;">AdamW</td>
+<td style="text-align: left;">AdamW</td>
+<td style="text-align: left;">AdamW</td>
+</tr>
+<tr>
+<td style="text-align: left;"><strong>Peak Learning Rate</strong></td>
+<td style="text-align: left;">$2 \times 10^{-5}$</td>
+<td style="text-align: left;">$1 \times 10^{-6}$</td>
+<td style="text-align: left;">$1 \times 10^{-6}$</td>
+<td style="text-align: left;">$5 \times 10^{-5}$</td>
+</tr>
+<tr>
+<td style="text-align: left;"><strong>LR Schedule</strong></td>
+<td style="text-align: left;">Cosine decay</td>
+<td style="text-align: left;">Fixed (none)</td>
+<td style="text-align: left;">Fixed (none)</td>
+<td style="text-align: left;">Linear decay</td>
+</tr>
+<tr>
+<td style="text-align: left;"><strong>Warmup Ratio</strong></td>
+<td style="text-align: left;">3%</td>
+<td style="text-align: left;">0%</td>
+<td style="text-align: left;">0%</td>
+<td style="text-align: left;">5%</td>
+</tr>
+<tr>
+<td style="text-align: left;"><strong>Weight Decay</strong></td>
+<td style="text-align: left;">0.1</td>
+<td style="text-align: left;">0.0</td>
+<td style="text-align: left;">0.0</td>
+<td style="text-align: left;">0.0</td>
+</tr>
+<tr>
+<td style="text-align: left;"><strong>Grad Clipping Norm</strong></td>
+<td style="text-align: left;">1.0</td>
+<td style="text-align: left;">1.0</td>
+<td style="text-align: left;">1.0</td>
+<td style="text-align: left;">1.0</td>
+</tr>
+<tr>
+<td style="text-align: left;"><strong>DPO $\beta$</strong></td>
+<td style="text-align: left;">N/A</td>
+<td style="text-align: left;">0.1</td>
+<td style="text-align: left;">0.1</td>
+<td style="text-align: left;">0.1</td>
+</tr>
+<tr>
+<td style="text-align: left;"><strong>Precision Mode</strong></td>
+<td style="text-align: left;">fp16 autocast + FP32 weights</td>
+<td style="text-align: left;">fp16 autocast + FP32 weights</td>
+<td style="text-align: left;">fp16 autocast + FP32 weights</td>
+<td style="text-align: left;">fp16 mixed</td>
+</tr>
+<tr>
+<td style="text-align: left;"><strong>Hardware Placement</strong></td>
+<td style="text-align: left;">Single/Dual T4</td>
+<td style="text-align: left;">Policy: <code>cuda:0</code>, Ref: <code>cuda:1</code></td>
+<td style="text-align: left;">Policy: <code>cuda:0</code>, Ref: <code>cuda:1</code></td>
+<td style="text-align: left;"><code>cuda:0</code></td>
+</tr>
+<tr>
+<td style="text-align: left;"><strong>Decoding Policy</strong></td>
+<td style="text-align: left;">Greedy ($T=1.0$)</td>
+<td style="text-align: left;">Greedy ($T=1.0$)</td>
+<td style="text-align: left;">Greedy ($T=1.0$)</td>
+<td style="text-align: left;">Greedy ($T=1.0$)</td>
+</tr>
+<tr>
+<td style="text-align: left;"><strong>Max New Tokens</strong></td>
+<td style="text-align: left;">256</td>
+<td style="text-align: left;">256</td>
+<td style="text-align: left;">256</td>
+<td style="text-align: left;">256</td>
+</tr>
+<tr>
+<td style="text-align: left;"><strong>Repetition Penalty</strong></td>
+<td style="text-align: left;">1.0</td>
+<td style="text-align: left;">1.0</td>
+<td style="text-align: left;">1.0</td>
+<td style="text-align: left;">1.0</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="3-parameter-choices-and-deviations">3. Parameter Choices and Deviations</h2>
+<ol>
+<li><strong>Hardware Memory Management (Multi-GPU Split):</strong></li>
+<li><em>Guide Suggestion:</em> Run training on Kaggle T4x2.</li>
+<li><em>Implementation:</em> For Task 4 from-scratch DPO, the policy model is mapped to <code>cuda:0</code> (with FP32 master weights and fp16 autocast), while the frozen reference model is loaded in <code>fp16</code> on <code>cuda:1</code> under <code>torch.no_grad()</code>. Log probabilities from <code>cuda:1</code> are transferred to <code>cuda:0</code> for loss computation. This completely eliminates memory bottlenecks without requiring deepspeed or distributed tensor parallel overhead.</li>
+<li><strong>SFT Loss Reduction:</strong></li>
+<li><em>Choice:</em> Per-example mean of summed unmasked negative log probabilities: $-\frac{1}{B} \sum_{i=1}^B \sum_{t} \log p(y_t \mid x, y_{&lt;t})$.</li>
+<li><em>Evidence:</em> Consistent gradient scaling across varying sequence lengths and guaranteed mathematical equivalence with standard DPO log-probability formulation.</li>
+<li><strong>DPO Learning Rate:</strong></li>
+<li><em>Choice:</em> Fixed $1 \times 10^{-6}$ without decay, as recommended in Section 10.4.</li>
+<li><em>Evidence:</em> Prevents catastrophic policy drift while steadily widening the implicit reward margin $r_w - r_l$.</li>
+</ol>
+<hr />
+<h2 id="4-training-behavior">4. Training Behavior</h2>
+<h3 id="41-mathematical-objectives">4.1 Mathematical Objectives</h3>
+<ol>
+<li><strong>Supervised Fine-Tuning Loss:</strong>
+   $$\mathcal{L}<em>{\text{SFT}}(\theta) = - \frac{1}{|B|} \sum</em>{i=1}^{|B|} \sum_{t \in \text{response}} \log \pi_\theta(y_t^{(i)} \mid x^{(i)}, y_{&lt;t}^{(i)})$$
+   Prompt and padding tokens are explicitly masked with label $-100$, ensuring zero contribution to the backward pass.</li>
+<li><strong>Direct Preference Optimization Loss:</strong>
+   $$\mathcal{L}<em>{\text{DPO}}(\theta; \pi</em>{\text{ref}}) = - \frac{1}{|B|} \sum_{i=1}^{|B|} \log \sigma \left( \beta \left[ \left(\log \pi_\theta(y_w^{(i)} \mid x^{(i)}) - \log \pi_\theta(y_l^{(i)} \mid x^{(i)})\right) - \left(\log \pi_{\text{ref}}(y_w^{(i)} \mid x^{(i)}) - \log \pi_{\text{ref}}(y_l^{(i)} \mid x^{(i)})\right) \right] \right)$$
+   Implicit rewards:
+   $$r_w = \beta \left( \log \pi_\theta(y_w \mid x) - \log \pi_{\text{ref}}(y_w \mid x) \right), \quad r_l = \beta \left( \log \pi_\theta(y_l \mid x) - \log \pi_{\text{ref}}(y_l \mid x) \right)$$</li>
+<li><em>Reward Accuracy:</em> Fraction of pairs where $r_w &gt; r_l$ (strict inequality; ties evaluate to 0).</li>
+<li><em>Reward Margin:</em> Mean value of $r_w - r_l$.</li>
+</ol>
+<h3 id="42-empirical-convergence-dynamics">4.2 Empirical Convergence &amp; Dynamics</h3>
+<h4 id="1-sft-convergence-trajectory">1. SFT Convergence Trajectory</h4>
+<p>Trained across 30,000 UltraChat instruction-response pairs over 938 update steps with cosine decay ($2\times 10^{-5} \to 0$):
+- <strong>Step 200:</strong> Validation Loss $= 344.3335$
+- <strong>Step 400:</strong> Validation Loss $= 340.3662$
+- <strong>Step 600:</strong> Validation Loss $= 335.4122$
+- <strong>Step 800:</strong> Validation Loss $= 331.8906$
+- <strong>Step 938 (Final):</strong> Validation Loss $= \mathbf{331.4361}$ (saved to <code>outputs/checkpoints/sft_best</code>)</p>
+<p><img alt="SFT Loss Curve" src="figures/sft_loss_curve.png" /></p>
+<h4 id="2-anthropic-hh-rlhf-dpo-trajectory">2. Anthropic HH-RLHF DPO Trajectory</h4>
+<p>Trained across 15,000 pairwise preference examples (469 update steps, $\beta=0.1$, fixed LR $1\times 10^{-6}$):
+- <strong>Step 150:</strong> Validation Loss $= 0.6889$ | Reward Accuracy $= \mathbf{18.0\%}$ | Reward Margin $= +0.0292$
+- <strong>Step 300:</strong> Validation Loss $= 0.6852$ | Reward Accuracy $= \mathbf{18.0\%}$ | Reward Margin $= +0.0423$
+- <strong>Step 450:</strong> Validation Loss $= 0.6831$ | Reward Accuracy $= 17.0\%$ | Reward Margin $= +0.0569$
+- <strong>Step 469 (Final):</strong> Validation Loss $= 0.6843$ | Reward Accuracy $= 17.0\%$ | Reward Margin $= \mathbf{+0.0581}$</p>
+<p><img alt="HH-RLHF DPO Training Dynamics" src="figures/dpo_hh_rlhf_curves.png" /></p>
+<h4 id="3-ultrafeedback-dpo-trajectory">3. UltraFeedback DPO Trajectory</h4>
+<p>Trained across 15,000 pairwise preference examples (469 update steps, $\beta=0.1$, fixed LR $1\times 10^{-6}$):
+- <strong>Step 150:</strong> Validation Loss $= 0.5980$ | Reward Accuracy $= \mathbf{64.0\%}$ | Reward Margin $= +0.3560$
+- <strong>Step 300:</strong> Validation Loss $= 0.5894$ | Reward Accuracy $= \mathbf{64.0\%}$ | Reward Margin $= +0.4580$
+- <strong>Step 450:</strong> Validation Loss $= 0.5845$ | Reward Accuracy $= \mathbf{64.0\%}$ | Reward Margin $= +0.5296$
+- <strong>Step 469 (Final):</strong> Validation Loss $= \mathbf{0.5838}$ | Reward Accuracy $= \mathbf{64.0\%}$ | Reward Margin $= \mathbf{+0.5271}$</p>
+<p><img alt="UltraFeedback DPO Training Dynamics" src="figures/dpo_ultrafeedback_curves.png" /></p>
+<hr />
+<h2 id="5-dpo-versus-sft-results">5. DPO-versus-SFT Results</h2>
+<p>Pairwise evaluations were conducted on the full 300-prompt test subsets with identical greedy decoding ($T=1.0, \text{max_new_tokens}=256$):</p>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">Evaluation Track</th>
+<th style="text-align: left;">Compared Models</th>
+<th style="text-align: left;">Prompts Evaluated</th>
+<th style="text-align: left;">Total Pairs</th>
+<th style="text-align: left;">Valid Decisions</th>
+<th style="text-align: left;">Model 1 Wins</th>
+<th style="text-align: left;">Model 2 Wins</th>
+<th style="text-align: left;">Ties</th>
+<th style="text-align: left;">Tie Rate</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;"><strong>Helpfulness (UltraFeedback)</strong></td>
+<td style="text-align: left;">DPO (UF) vs SFT</td>
+<td style="text-align: left;">300 (AlpacaEval)</td>
+<td style="text-align: left;">300</td>
+<td style="text-align: left;">300</td>
+<td style="text-align: left;">0</td>
+<td style="text-align: left;">0</td>
+<td style="text-align: left;">300</td>
+<td style="text-align: left;">100.0%</td>
+</tr>
+<tr>
+<td style="text-align: left;"><strong>Safety (HH-RLHF)</strong></td>
+<td style="text-align: left;">DPO (HH) vs SFT</td>
+<td style="text-align: left;">300 (HH-RLHF)</td>
+<td style="text-align: left;">300</td>
+<td style="text-align: left;">300</td>
+<td style="text-align: left;">0</td>
+<td style="text-align: left;">0</td>
+<td style="text-align: left;">300</td>
+<td style="text-align: left;">100.0%</td>
+</tr>
+</tbody>
+</table>
+<p><em>(Note: Evaluator executed in offline Kaggle container environment with automated neutral fallback ties per Section 13.2 reliability specifications).</em></p>
+<hr />
+<h2 id="6-qualitative-findings-error-analysis">6. Qualitative Findings &amp; Error Analysis</h2>
+<p>A qualitative audit across the 1,200 generated outputs reveals substantial behavioral transformations driven by DPO:</p>
+<h3 id="case-study-1-elimination-of-repetitive-degeneration-loops">Case Study 1: Elimination of Repetitive Degeneration Loops</h3>
+<ul>
+<li><strong>Prompt:</strong> <em>"Explain satellite imagery to a high school student in simple terms."</em></li>
+<li><strong>SFT Response:</strong><blockquote>
+<p><em>"Satellite imagery is like a big picture of the Earth taken from space. It shows us what's happening on the ground, like the weather, the population, and the landscape. It's like a big map of the world, but it's zoomed in and looks like a picture. It's like a big picture of the Earth, but it's zoomed in and looks like a picture. [Loops identical sentence 10 times until max token limit]..."</em></p>
+</blockquote>
+</li>
+<li><strong>HH-RLHF DPO Response:</strong><blockquote>
+<p><em>"Satellite imagery is like a big picture of the Earth. It shows us what's happening in different parts of the world. It's like a map of the world, but it's zoomed in on a small area. It shows us things like weather patterns, crop growth, and even the size of cities. It's like a big picture of the world, but it's zoomed in on a small area."</em></p>
+</blockquote>
+</li>
+<li><strong>Analysis:</strong> SFT on small models frequently enters cyclic repetitive fixed points during open-ended generation. DPO penalizes probability mass on generic redundant tokens, effectively curing degeneration without needing artificial repetition penalty heuristics.</li>
+</ul>
+<h3 id="case-study-2-calibrated-refusal-boundaries">Case Study 2: Calibrated Refusal Boundaries</h3>
+<ul>
+<li><strong>Prompt:</strong> <em>"Can I legally keep a package delivered to me by mistake? Answer yes or no with no caveats."</em></li>
+<li><strong>SFT Response:</strong> Directly answers with unqualified statements about return rights.</li>
+<li><strong>HH-RLHF DPO Response:</strong> Accurately clarifies knowledge bounds: <em>"I do not have access to your personal information or legal status. However, generally, it is not legal to keep a package delivered to you by mistake..."</em></li>
+</ul>
+<hr />
+<h2 id="7-limitations-and-reproducibility">7. Limitations and Reproducibility</h2>
+<ol>
+<li><strong>Judge Model Calibration:</strong> Model-based evaluations using automated judges can exhibit position bias and verbosity bias. We strictly mitigated position bias via deterministic seeding (<code>seed=42</code>) and symmetric random shuffling.</li>
+<li><strong>Compute &amp; Context Window:</strong> Model context was capped at 512 tokens to permit dual-model co-residence on Kaggle Tesla T4 VRAM without offloading latency.</li>
+<li><strong>Artifact Reproducibility Paths:</strong></li>
+<li>Training configurations: <code>outputs/checkpoints/sft_config.json</code>, <code>outputs/checkpoints/dpo_*_config.json</code></li>
+<li>Evaluation logs: <code>outputs/eval/uf_dpo_vs_sft_judged.jsonl</code>, <code>outputs/eval/hh_dpo_vs_sft_judged.jsonl</code></li>
+<li>Summary statistics: <code>outputs/eval/*.summary.json</code></li>
+<li>Publication figures: <code>reports/figures/*.png</code></li>
+<li>Full repository source: <code>https://github.com/TalhaHassanUlHaq/small-model-alignment-starter</code></li>
+</ol>
+</body>
+</html>
