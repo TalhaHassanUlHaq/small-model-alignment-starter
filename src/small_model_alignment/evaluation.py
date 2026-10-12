@@ -16,6 +16,13 @@ def normalize_decision(value: str) -> str:
 
     text = value.strip().lower()
 
+    if text in ("a", "response a"):
+        return "A"
+    if text in ("b", "response b"):
+        return "B"
+    if text in ("tie", "none"):
+        return "tie"
+
     # Explicit bracketed tag checks
     if "[[response a]]" in text or "[[a]]" in text:
         return "A"
